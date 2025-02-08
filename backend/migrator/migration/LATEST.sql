@@ -36,52 +36,6 @@ CREATE TABLE principal (
     profile JSONB NOT NULL DEFAULT '{}'
 );
 
--- Default bytebase system account id is 1
-INSERT INTO
-    principal (
-        id,
-        creator_id,
-        updater_id,
-        type,
-        name,
-        email,
-        password_hash
-    )
-VALUES
-    (
-        1,
-        1,
-        1,
-        'SYSTEM_BOT',
-        'Bytebase',
-        'support@bytebase.com',
-        ''
-    );
-
--- Pseudo allUsers account id is 2.
-INSERT INTO
-    principal (
-        id,
-        creator_id,
-        updater_id,
-        type,
-        name,
-        email,
-        password_hash
-    )
-VALUES
-    (
-        2,
-        2,
-        2,
-        'SYSTEM_BOT',
-        'All Users',
-        'allUsers',
-        ''
-    );
-
-ALTER SEQUENCE principal_id_seq RESTART WITH 101;
-
 -- Setting
 CREATE TABLE setting (
     id SERIAL PRIMARY KEY,
@@ -176,27 +130,6 @@ CREATE TABLE project (
 CREATE UNIQUE INDEX idx_project_unique_key ON project(key);
 
 CREATE UNIQUE INDEX idx_project_unique_resource_id ON project(resource_id);
-
-INSERT INTO
-    project (
-        id,
-        creator_id,
-        updater_id,
-        name,
-        key,
-        resource_id
-    )
-VALUES
-    (
-        1,
-        1,
-        1,
-        'Default',
-        'DEFAULT',
-        'default'
-    );
-
-ALTER SEQUENCE project_id_seq RESTART WITH 101;
 
 -- Project Hook
 CREATE TABLE project_webhook (
@@ -573,51 +506,14 @@ CREATE INDEX idx_issue_subscriber_subscriber_id ON issue_subscriber(subscriber_i
 -- instance change history records the changes an instance and its databases.
 CREATE TABLE instance_change_history (
     id BIGSERIAL PRIMARY KEY,
-    row_status row_status NOT NULL DEFAULT 'NORMAL',
-    creator_id INTEGER NOT NULL REFERENCES principal (id),
     created_ts BIGINT NOT NULL DEFAULT extract(epoch from now()),
-    updater_id INTEGER NOT NULL REFERENCES principal (id),
     updated_ts BIGINT NOT NULL DEFAULT extract(epoch from now()),
-    -- NULL means the migrations for Bytebase's own metadata database.
-    instance_id INTEGER REFERENCES instance (id),
-    -- NULL means an instance-level change.
-    database_id INTEGER REFERENCES db (id),
-    project_id INTEGER REFERENCES project (id),
-    -- issue_id is nullable because this field is backfilled and may not be present.
-    issue_id INTEGER REFERENCES issue (id),
-    -- Record the client version creating this change history. For Bytebase, we use its binary release version. Different Bytebase release might
-    -- record different history info and this field helps to handle such situation properly. Moreover, it helps debugging.
-    release_version TEXT NOT NULL,
-    -- Used to detect out of order change history together with 'namespace' and 'version' column.
-    sequence BIGINT NOT NULL CONSTRAINT instance_change_history_sequence_check CHECK (sequence >= 0),
-    -- We call it source because maybe we could load history from other migration tool.
-    -- Currently allowed values are UI, VCS, LIBRARY.
-    source TEXT NOT NULL CONSTRAINT instance_change_history_source_check CHECK (source IN ('UI', 'VCS', 'LIBRARY')),
-    -- Currently allowed values are BASELINE, MIGRATE, MIGRATE_SDL, BRANCH, DATA.
-    type TEXT NOT NULL CONSTRAINT instance_change_history_type_check CHECK (type IN ('BASELINE', 'MIGRATE', 'MIGRATE_SDL', 'BRANCH', 'DATA')),
-    -- Currently allowed values are PENDING, DONE, FAILED.
-    -- PostgreSQL can't do cross database transaction, so we can't record DDL and change_history into a single transaction.
-    -- Thus, we create a "PENDING" record before applying the DDL and update that record to "DONE" after applying the DDL.
     status TEXT NOT NULL CONSTRAINT instance_change_history_status_check CHECK (status IN ('PENDING', 'DONE', 'FAILED')),
-    -- Record the change version.
     version TEXT NOT NULL,
-    description TEXT NOT NULL,
-    -- Record the change statement in preview format.
-    statement TEXT NOT NULL,
-    -- Record the sheet for the change statement. Optional.
-    sheet_id BIGINT NULL,
-    -- Record the schema after change
-    schema TEXT NOT NULL,
-    -- Record the schema before change. Though we could also fetch it from the previous change history, it would complicate fetching logic.
-    -- Besides, by storing the schema_prev, we can perform consistency check to see if the change history has any gaps.
-    schema_prev TEXT NOT NULL,
-    execution_duration_ns BIGINT NOT NULL,
-    payload JSONB NOT NULL DEFAULT '{}'
+    execution_duration_ns BIGINT NOT NULL
 );
 
-CREATE UNIQUE INDEX idx_instance_change_history_unique_instance_id_database_id_sequence ON instance_change_history (instance_id, database_id, sequence);
-
-CREATE UNIQUE INDEX idx_instance_change_history_unique_instance_id_database_id_version ON instance_change_history (instance_id, database_id, version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_instance_change_history_unique_version ON instance_change_history (version);
 
 ALTER SEQUENCE instance_change_history_id_seq RESTART WITH 101;
 
@@ -900,30 +796,6 @@ CREATE UNIQUE INDEX idx_changelist_project_id_name ON changelist(project_id, nam
 
 ALTER SEQUENCE changelist_id_seq RESTART WITH 101;
 
-CREATE TABLE branch (
-  id SERIAL PRIMARY KEY,
-  row_status row_status NOT NULL DEFAULT 'NORMAL',
-  creator_id INTEGER NOT NULL REFERENCES principal (id),
-  created_ts BIGINT NOT NULL DEFAULT extract(epoch from now()),
-  updater_id INTEGER NOT NULL REFERENCES principal (id),
-  updated_ts BIGINT NOT NULL DEFAULT extract(epoch from now()),
-  project_id INTEGER NOT NULL REFERENCES project (id),
-  name TEXT NOT NULL,
-  engine TEXT NOT NULL,
-  base JSONB NOT NULL DEFAULT '{}',
-  head JSONB NOT NULL DEFAULT '{}',
-  base_schema TEXT NOT NULL DEFAULT '',
-  head_schema TEXT NOT NULL DEFAULT '',
-  reconcile_state TEXT NOT NULL DEFAULT '',
-  config JSONB NOT NULL DEFAULT '{}'
-);
-
-CREATE UNIQUE INDEX idx_branch_unique_project_id_name ON branch(project_id, name);
-
-CREATE INDEX idx_branch_reconcile_state ON branch(reconcile_state);
-
-ALTER SEQUENCE branch_id_seq RESTART WITH 101;
-
 CREATE TABLE export_archive (
   id SERIAL PRIMARY KEY,
   created_ts BIGINT NOT NULL DEFAULT extract(epoch from now()),
@@ -1021,3 +893,20 @@ CREATE TABLE IF NOT EXISTS release (
 ALTER SEQUENCE release_id_seq RESTART WITH 101;
 
 CREATE INDEX idx_release_project_id ON release (project_id);
+
+
+-- Default bytebase system account id is 1.
+INSERT INTO principal (id, creator_id, updater_id, type, name, email, password_hash) VALUES (1, 1, 1, 'SYSTEM_BOT', 'Bytebase', 'support@bytebase.com', '');
+
+ALTER SEQUENCE principal_id_seq RESTART WITH 101;
+
+-- Default project.
+INSERT INTO project (id, creator_id, updater_id, name, key, resource_id) VALUES (1, 1, 1, 'Default', 'DEFAULT', 'default');
+
+ALTER SEQUENCE project_id_seq RESTART WITH 101;
+
+-- Create "test" and "prod" environments
+INSERT INTO environment (id, creator_id, updater_id, name, "order", resource_id) VALUES (101, 1, 1, 'Test', 0, 'test');
+INSERT INTO environment (id, creator_id, updater_id, name, "order", resource_id) VALUES (102, 1, 1, 'Prod', 1, 'prod');
+
+ALTER SEQUENCE environment_id_seq RESTART WITH 103;
